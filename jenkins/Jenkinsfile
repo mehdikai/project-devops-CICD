@@ -1,0 +1,90 @@
+pipeline {
+    agent any
+
+    environment {
+        GITHUB_PAT = credentials('github-pat')  // GitHub Personal Access Token
+        DOCKER_CREDENTIALS = credentials('docker-hub-credentials')  // Docker Hub Credentials
+        // Ensure the image name includes your Docker Hub username.
+        DOCKER_IMAGE = "${DOCKER_CREDENTIALS_USR}/age-calculator:latest"
+        
+        // Now the YAML files are stored in your repository
+        K8S_DEPLOYMENT_FILE = 'age-calculator/deployment.yaml'
+        K8S_SERVICE_FILE = 'age-calculator/service.yaml'
+        K8S_DEPLOYMENT_NAME = 'age-calculator'
+    }
+
+    stages {
+        stage('Clone Repository') {
+            steps {
+                sh """
+                if [ -d "age-calculator/.git" ]; then
+                    cd age-calculator
+                    git reset --hard
+                    git pull origin main
+                else
+                    git clone https://${GITHUB_PAT}@github.com/goldentrader/age-calculator
+                fi
+                """
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('age-calculator') {
+                    sh "docker build -t ${DOCKER_IMAGE} ."
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                script {
+                    sh """
+                    echo ${DOCKER_CREDENTIALS_PSW} | docker login -u ${DOCKER_CREDENTIALS_USR} --password-stdin
+                    docker push ${DOCKER_IMAGE}
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes Worker') {
+            steps {
+                script {
+                    sshagent(['k8s-worker-ssh']) {
+                        sh """
+                        # Copy the Deployment and Service YAML files to the remote worker
+                        scp -o StrictHostKeyChecking=no ${K8S_DEPLOYMENT_FILE} azureuser@k8s-worker:/tmp/deployment.yaml
+                        scp -o StrictHostKeyChecking=no ${K8S_SERVICE_FILE} azureuser@k8s-worker:/tmp/service.yaml
+
+                        ssh -o StrictHostKeyChecking=no azureuser@k8s-worker <<EOF
+                        # Pull the latest Docker image on the worker node
+                        docker pull ${DOCKER_IMAGE}
+                        
+                        # Clean up old resources if they exist
+                        kubectl delete deployment ${K8S_DEPLOYMENT_NAME} --ignore-not-found
+                        kubectl delete service age-calculator-service --ignore-not-found
+                        
+                        # Apply the new Deployment and Service configurations
+                        kubectl apply -f /tmp/deployment.yaml
+                        kubectl apply -f /tmp/service.yaml
+                        
+                        # Restart the deployment to pick up any changes and wait for rollout
+                        kubectl rollout restart deployment/${K8S_DEPLOYMENT_NAME}
+                        kubectl rollout status deployment/${K8S_DEPLOYMENT_NAME} --timeout=180s
+EOF
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Deployment successful! 🚀'
+        }
+        failure {
+            echo 'Deployment failed! ❌'
+        }
+    }
+}

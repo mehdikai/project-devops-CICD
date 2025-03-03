@@ -1,0 +1,142 @@
+---
+- name: Suppression et Réinstallation de Kubernetes et Docker
+  hosts: all
+  become: yes
+  tasks:
+
+    # ================================
+    # 🔴 SUPPRESSION DE DOCKER & KUBERNETES
+    # ================================
+
+    - name: Arrêter et désactiver Docker et Kubelet
+      service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - docker
+        - kubelet
+      ignore_errors: yes
+
+    - name: Désinstaller Docker et Kubernetes
+      apt:
+        name:
+          - docker.io
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: absent
+
+    - name: Supprimer les fichiers et configurations Docker & Kubernetes
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/docker
+        - /var/lib/kubelet
+        - /etc/docker
+        - /etc/kubernetes
+        - /etc/apt/sources.list.d/kubernetes.list
+        - /etc/apt/sources.list.d/docker.list
+      ignore_errors: yes
+
+    - name: Nettoyer les paquets inutiles
+      shell: apt autoremove -y && apt autoclean -y
+
+    # ================================
+    # 🔹 INSTALLATION DE DOCKER
+    # ================================
+
+    - name: Mettre à jour APT et installer les dépendances
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+
+    - name: Ajouter la clé GPG de Docker
+      shell: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/trusted.gpg.d/docker.asc
+
+    - name: Ajouter le dépôt Docker
+      shell: add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+
+    - name: Installer Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+
+    - name: Activer et démarrer Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    # ================================
+    # 🔹 INSTALLATION DE KUBERNETES
+    # ================================
+
+    - name: Ajouter la clé GPG de Kubernetes
+      shell: curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo tee /etc/apt/trusted.gpg.d/kubernetes.asc
+
+    - name: Ajouter le dépôt Kubernetes
+      shell: echo "deb https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Mettre à jour APT et installer Kubernetes
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Activer et démarrer Kubelet
+      service:
+        name: kubelet
+        state: started
+        enabled: yes
+
+    # ================================
+    # 🔹 VÉRIFICATION DES INSTALLATIONS
+    # ================================
+
+    - name: Vérifier que Docker est installé
+      command: which docker
+      register: docker_installed
+      failed_when: docker_installed.rc != 0
+      changed_when: false
+
+    - name: Vérifier que kubelet est installé
+      command: which kubelet
+      register: kubelet_installed
+      failed_when: kubelet_installed.rc != 0
+      changed_when: false
+
+    - name: Vérifier que kubeadm est installé
+      command: which kubeadm
+      register: kubeadm_installed
+      failed_when: kubeadm_installed.rc != 0
+      changed_when: false
+
+    - name: Vérifier que kubectl est installé
+      command: which kubectl
+      register: kubectl_installed
+      failed_when: kubectl_installed.rc != 0
+      changed_when: false
+
+    - name: Vérifier l'état du cluster Kubernetes
+      command: kubectl get nodes
+      register: cluster_status
+      failed_when: false
+      changed_when: false
+      when: kubectl_installed.rc == 0
+
+    - name: Afficher l'état du cluster
+      debug:
+        msg: "{{ cluster_status.stdout_lines }}"
+      when: kubectl_installed.rc == 0

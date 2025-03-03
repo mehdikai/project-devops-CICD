@@ -1,0 +1,32 @@
+def pluginList = [
+    "maven-plugin",
+    "pipeline",
+    "docker-workflow",
+    "junit",
+    "publish-over-ssh",
+    "git",
+    "sonar",
+    "kubernetes"
+]
+
+def jenkins = Jenkins.instance
+
+pluginList.each { plugin ->
+    if (!jenkins.getPluginManager().getPlugin(plugin)) {
+        println "Installing ${plugin}..."
+        def updateCenter = jenkins.getUpdateCenter()
+        def pluginInfo = updateCenter.getPlugin(plugin)
+        if (pluginInfo != null) {
+            def installFuture = pluginInfo.deploy()
+            while (!installFuture.isDone()) {
+                sleep(1000)
+            }
+        } else {
+            println "Plugin ${plugin} not found."
+        }
+    } else {
+        println "Plugin ${plugin} already installed."
+    }
+}
+
+jenkins.save()
